@@ -24,7 +24,7 @@ enum class object_type {
 };
 
 struct job;
-using JsonArray = std::list<job>;
+using JsonArray = std::vector<job>;
 using JsonDict = std::map<std::string, job>;
 struct JsonNull {};
 
@@ -243,6 +243,7 @@ private:
 	JsonArray parse_array() {
 		expect('[');
 		JsonArray array;
+		array.reserve(50);
 		while (peek() != ']') {
 			auto val = parse_value();
 			array.push_back(std::move(val));
@@ -270,11 +271,11 @@ private:
 		std::string text;
 		while (j[pos] != '"') {
 			if (j[pos] != '\\') {
-				text += j[pos];
 				pos++;
 			}
 			else {
 				// escape char
+				text.append(&j[begin], &j[pos]);
 				if (char c = next2()) {
 					text.push_back(c);
 				}
@@ -282,8 +283,10 @@ private:
 					throw std::runtime_error("\\0 encountered.");
 				}
 				pos++;
+				begin = pos;
 			}
 		}
+		text.append(&j[begin], &j[pos]);
 		expect('"');
 		return text;
 	}
@@ -375,10 +378,10 @@ int main()
 			ifs >> jp;
 			try {
 				ankerl::nanobench::Bench().minEpochIterations(200).run(each, [&] {
+					//jp.j = R"("\\")";
 					auto job = jp.parse();
 					// job.pretty_print(std::cout);
 					ankerl::nanobench::doNotOptimizeAway(job);
-
 					//json_parser jp2;
 					//ss1 >> jp2;
 					//auto job2 = jp2.parse();
