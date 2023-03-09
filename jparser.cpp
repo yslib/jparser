@@ -7,6 +7,12 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <map>
+#include <list>
+#include <variant>
+
+#define ANKERL_NANOBENCH_IMPLEMENT
+#include "nanobench.h"
 
 enum class object_type {
 	dict,
@@ -18,35 +24,30 @@ enum class object_type {
 };
 
 struct job;
-using JsonArray = std::vector<job>;
-using JsonDict = std::unordered_map<std::string, job>;
+using JsonArray = std::list<job>;
+using JsonDict = std::map<std::string, job>;
+struct JsonNull {};
+
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...)->overloaded<Ts...>;
+
 
 struct job {
-	std::vector<job> array;
-	std::unordered_map<std::string, job> dict;
-	double number;
-	bool boolean;
-	std::string text;
-	object_type type;
-	job() :type(object_type::null), number(0), boolean(false) {}
-	job(double n) :number(n), type(object_type::number) {}
-	job(bool v) :boolean(v), type(object_type::boolean) {}
-	job(std::string text) :text(std::move(text)), type(object_type::text) {}
-	job(std::unordered_map<std::string, job> dict) :dict(std::move(dict)), type(object_type::dict) {}
-	job(std::vector<job> array) :array(std::move(array)), type(object_type::array) {}
+	std::variant<double, bool, std::string, JsonDict, JsonArray, JsonNull> value;
+	job() :value(JsonNull()) {}
+	job(double n) :value(n) {}
+	job(bool v) : value(v) {}
+	job(std::string text) :value(text) {}
+	job(JsonDict dict) :value(std::move(dict)) {}
+	job(JsonArray array) :value(std::move(array)) {}
 
 	job& operator[](const std::string& key) {
-		if (type != object_type::dict) {
-			throw std::runtime_error("not a dict");
-		}
-		return dict[key];
-	}
-
-	job& operator[](const char* key) {
-		if (type != object_type::dict) {
-			throw std::runtime_error("not a dict");
-		}
-		return dict[key];
+		return std::visit([&](auto&& arg)->job& {
+			using T = std::decay_t<decltype(arg)>;
+			if constexpr (std::is_same_v<T, JsonDict>) {
+				return arg[key];
+			}
+			}, value);
 	}
 
 	std::ofstream& operator<<(std::ofstream& os) {
@@ -55,41 +56,14 @@ struct job {
 
 	template<typename T>
 	T as() {
-		if constexpr (std::is_same_v<T, double>) {
-			if (type == object_type::number) {
-				return number;
-			}
-			throw std::runtime_error("type error\n");
+		if (auto* ptr = std::get_if<T>(&value)) {
+			return*ptr;
 		}
-		if constexpr (std::is_same_v<T, std::string>) {
-			if (type == object_type::text) {
-				return text;
-			}
-			throw std::runtime_error("type error\n");
-		}
-		if constexpr (std::is_same_v<T, bool>) {
-			if (type == object_type::boolean) {
-				return boolean;
-			}
-			throw std::runtime_error("type error\n");
-		}
-		if constexpr (std::is_same_v<T, JsonArray>) {
-			if (type == object_type::array) {
-				return array;
-			}
-			throw std::runtime_error("type error\n");
-		}
-
-		if constexpr (std::is_same_v<T, JsonDict>) {
-			if (type == object_type::dict) {
-				return dict;
-			}
-			throw std::runtime_error("type error\n");
-		}
+		throw std::runtime_error("value is invalid");
 	}
 
-	bool is_null() {
-		return type == object_type::null;
+	void reset(size_t pos) {
+		pos = pos;
 	}
 
 	void pretty_print(std::ostream& os)const {
@@ -104,18 +78,18 @@ struct job {
 		}
 	}
 	void _print(int indent, std::ostream& os)const {
-		if (type == object_type::array) {
-			if (array.empty() == true) {
+		if (auto* array = std::get_if<JsonArray>(&value)) {
+			if (array->empty() == true) {
 				os << "[]";
 			}
 			else {
 				os << "[\n";
 				_print_indent(indent + 1, os);
 				int count = 0;
-				for (auto e : array) {
+				for (auto e : *array) {
 					e._print(indent + 1, os);
 					count++;
-					if (count != array.size()) {
+					if (count != array->size()) {
 						os << ",\n";
 						_print_indent(indent + 1, os);
 					}
@@ -125,25 +99,22 @@ struct job {
 
 					}
 				}
-				//_print_indent(indent + 1);
 				os << "]";
 			}
 		}
-		else if (type == object_type::dict) {
-			// _print_indent(indent);
-			if (dict.empty() == true) {
+		else if (auto* dict = std::get_if<JsonDict>(&value)) {
+			if (dict->empty() == true) {
 				os << "{}";
 			}
 			else {
 				os << "{\n";
 				_print_indent(indent + 1, os);
 				auto count = 0;
-				for (auto e : dict) {
+				for (auto e : *dict) {
 					os << "\"" << e.first << "\": ";
 					e.second._print(indent + 1, os);
-
 					count++;
-					if (count != dict.size()) {
+					if (count != dict->size()) {
 						os << ",\n";
 						_print_indent(indent + 1, os);
 					}
@@ -155,15 +126,15 @@ struct job {
 				os << "}";
 			}
 		}
-		else if (type == object_type::boolean) {
-			os << boolean ? "true" : "false";
+		else if (auto* boolean = std::get_if<bool>(&value)) {
+			os << *boolean ? "true" : "false";
 		}
-		else if (type == object_type::number) {
-			os << number;
+		else if (auto* number = std::get_if<double>(&value)) {
+			os << *number;
 		}
-		else if (type == object_type::text) {
+		else if (auto* text = std::get_if<std::string>(&value)) {
 			os << '"';
-			for (auto c : text) {
+			for (auto c : *text) {
 				if (c == '"') {
 					os << "\\\"";
 				}
@@ -173,7 +144,7 @@ struct job {
 			}
 			os << '"';
 		}
-		else if (type == object_type::null) {
+		else if (auto* null = std::get_if<JsonNull>(&value)) {
 			os << "null";
 		}
 	}
@@ -187,16 +158,7 @@ struct json_parser {
 
 	job parse() {
 		pos = 0;
-		parse_whitespace();
-		if (peek() == '{') {
-			auto ret = job(parse_dict());
-			return ret;
-		}
-		else if (peek() == '[') {
-			auto ret = job(parse_array());
-			return ret;
-		}
-		throw std::runtime_error("parse error\n");
+		return parse_value();
 	}
 
 private:
@@ -217,11 +179,7 @@ private:
 
 	job parse_null() {
 		parse_whitespace();
-		//if (expect('null')) {
-		//	return job();
-		//}
-		if (next() == 'u' && next() == 'l' && next() == 'l') {
-			next();
+		if (expect("null")) {
 			return job();
 		}
 		throw std::runtime_error("null error");
@@ -241,7 +199,6 @@ private:
 		parse_whitespace();
 		if (j[pos] == e) {
 			pos++;
-			parse_whitespace();
 			return true;
 		}
 		throw std::runtime_error("expect error");
@@ -257,9 +214,10 @@ private:
 		return &j[pos];
 	}
 
-	std::unordered_map<std::string, job> parse_dict() {
+	JsonDict parse_dict() {
 		expect('{');
-		std::unordered_map<std::string, job> dict;
+		JsonDict dict;
+		//dict.reserve(50);
 		while (peek() != '}') {
 			auto key = parse_string();
 			expect(':');
@@ -270,22 +228,24 @@ private:
 			else {
 				throw std::runtime_error("duplicate key");
 			}
-			if (peek() != ',') {
+			if (peek() == ',') {
+				next();
+			}
+			else {
 				expect('}');
 				return dict;
 			}
-			next(); // ,
 		}
 		expect('}');
 		return dict;
 	}
 
-	std::vector<job> parse_array() {
+	JsonArray parse_array() {
 		expect('[');
-		std::vector<job> array;
+		JsonArray array;
 		while (peek() != ']') {
 			auto val = parse_value();
-			array.emplace_back(val);
+			array.push_back(std::move(val));
 			if (peek() != ',') {
 				expect(']');
 				return array;
@@ -305,12 +265,16 @@ private:
 	}
 
 	std::string parse_string() {
-		parse_whitespace();
 		expect('"');
 		auto begin = pos;
 		std::string text;
 		while (j[pos] != '"') {
-			if (j[pos] == '\\') {
+			if (j[pos] != '\\') {
+				text += j[pos];
+				pos++;
+			}
+			else {
+				// escape char
 				if (char c = next2()) {
 					text.push_back(c);
 				}
@@ -319,36 +283,27 @@ private:
 				}
 				pos++;
 			}
-			else {
-				text.push_back(j[pos++]);
-			}
 		}
-		// auto key = std::string(&j[begin], &j[pos]);
 		expect('"');
 		return text;
 	}
 
 	job parse_value() {
-		parse_whitespace();
-		if (peek() == 'n') { // null
-			return parse_null();
+		switch (peek()) {
+		case 'n':return parse_null();
+		case 'f':
+		case 't':return parse_boolean();
+		case '"':return parse_string();
+		case '{':return parse_dict();
+		case '[':return parse_array();
+		default:
+		{
+			if (_is_digit(peek())) {
+				return parse_number();
+			}
+			throw std::runtime_error("parse value error\n");
 		}
-		else if (peek() == 'f' || peek() == 't') {  // boolean
-			return parse_boolean();
 		}
-		else if (peek() == '"') { // text
-			return parse_string();
-		}
-		else if (_is_digit(peek())) { // number
-			return parse_number();
-		}
-		else if (peek() == '{') {
-			return parse_dict();
-		}
-		else if (peek() == '[') {
-			return parse_array();
-		}
-		throw std::runtime_error("parse value error\n");
 	}
 
 	job parse_number() {
@@ -370,7 +325,6 @@ private:
 	}
 
 	job parse_boolean() {
-		parse_whitespace();
 		if (peek() == 't') {  // true
 			if (expect("true")) {
 				return job(true);
@@ -412,26 +366,31 @@ int main()
 		"pass03.json",
 	};
 
+
+
 	for (const auto& each : filenames) {
 		std::ifstream ifs(each, std::ios::in);
 		if (ifs.is_open() == true) {
 			json_parser jp;
 			ifs >> jp;
 			try {
-				auto job = jp.parse();
-				std::stringstream ss1;
-				job.pretty_print(ss1);
+				ankerl::nanobench::Bench().minEpochIterations(200).run(each, [&] {
+					auto job = jp.parse();
+					// job.pretty_print(std::cout);
+					ankerl::nanobench::doNotOptimizeAway(job);
 
-				json_parser jp2;
-				ss1 >> jp2;
-				auto job2 = jp2.parse();
-				std::stringstream ss2;
-				job2.pretty_print(std::cout);
+					//json_parser jp2;
+					//ss1 >> jp2;
+					//auto job2 = jp2.parse();
+					//std::stringstream ss2;
+					//job2.pretty_print(std::cout);
+					//std::cout << each << " passed.\n";
+					}
+				);
 			}
 			catch (std::exception& e) {
 				std::cout << each << " exeption: " << e.what() << std::endl;
 			}
-			std::cout << each << " passed.\n";
 
 		}
 	}
