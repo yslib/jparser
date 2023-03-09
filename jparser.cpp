@@ -162,7 +162,16 @@ struct job {
 			os << number;
 		}
 		else if (type == object_type::text) {
-			os << '"' << text << '"';
+			os << '"';
+			for (auto c : text) {
+				if (c == '"') {
+					os << "\\\"";
+				}
+				else {
+					os << c;
+				}
+			}
+			os << '"';
 		}
 		else if (type == object_type::null) {
 			os << "null";
@@ -289,14 +298,34 @@ private:
 		return array;
 	}
 
+	char next2() {
+		if (pos >= j.length())return '\0';
+		pos++;
+		return j[pos];
+	}
+
 	std::string parse_string() {
 		parse_whitespace();
 		expect('"');
 		auto begin = pos;
-		while (j[pos] != '"')pos++;
-		auto key = std::string(&j[begin], &j[pos]);
+		std::string text;
+		while (j[pos] != '"') {
+			if (j[pos] == '\\') {
+				if (char c = next2()) {
+					text.push_back(c);
+				}
+				else {
+					throw std::runtime_error("\\0 encountered.");
+				}
+				pos++;
+			}
+			else {
+				text.push_back(j[pos++]);
+			}
+		}
+		// auto key = std::string(&j[begin], &j[pos]);
 		expect('"');
-		return key;
+		return text;
 	}
 
 	job parse_value() {
@@ -375,6 +404,12 @@ int main()
 		"Inflate.ahap",
 		"Oscillate.ahap",
 		"Rumble.ahap"
+		"canada.json",
+		"citm_catelog.json",
+		"twitter.json",
+		"pass01.json",
+		"pass02.json",
+		"pass03.json",
 	};
 
 	for (const auto& each : filenames) {
@@ -382,15 +417,22 @@ int main()
 		if (ifs.is_open() == true) {
 			json_parser jp;
 			ifs >> jp;
-			auto job = jp.parse();
-			std::stringstream ss1;
-			job.pretty_print(ss1);
+			try {
+				auto job = jp.parse();
+				std::stringstream ss1;
+				job.pretty_print(ss1);
 
-			json_parser jp2;
-			ss1 >> jp2;
-			auto job2 = jp2.parse();
-			std::stringstream ss2;
-			job2.pretty_print(std::cout);
+				json_parser jp2;
+				ss1 >> jp2;
+				auto job2 = jp2.parse();
+				std::stringstream ss2;
+				job2.pretty_print(std::cout);
+			}
+			catch (std::exception& e) {
+				std::cout << each << " exeption: " << e.what() << std::endl;
+			}
+			std::cout << each << " passed.\n";
+
 		}
 	}
 }
