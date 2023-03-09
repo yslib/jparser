@@ -24,8 +24,11 @@ enum class object_type {
 };
 
 struct job;
+using JsonString = std::string;
 using JsonArray = std::vector<job>;
-using JsonDict = std::map<std::string, job>;
+using JsonDict = std::map<JsonString, job>;
+using JsonNumber = double;
+using JsonBoolean = bool;
 struct JsonNull {};
 
 template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
@@ -33,15 +36,15 @@ template<class... Ts> overloaded(Ts...)->overloaded<Ts...>;
 
 
 struct job {
-	std::variant<double, bool, std::string, JsonDict, JsonArray, JsonNull> value;
+	std::variant<JsonNumber, JsonBoolean, JsonString, JsonDict, JsonArray, JsonNull> value;
 	job() :value(JsonNull()) {}
-	job(double n) :value(n) {}
-	job(bool v) : value(v) {}
-	job(std::string text) :value(text) {}
+	job(JsonNumber n) :value(n) {}
+	job(JsonBoolean v) : value(v) {}
+	job(JsonString text) :value(text) {}
 	job(JsonDict dict) :value(std::move(dict)) {}
 	job(JsonArray array) :value(std::move(array)) {}
 
-	job& operator[](const std::string& key) {
+	job& operator[](const JsonString& key) {
 		return std::visit([&](auto&& arg)->job& {
 			using T = std::decay_t<decltype(arg)>;
 			if constexpr (std::is_same_v<T, JsonDict>) {
@@ -50,20 +53,12 @@ struct job {
 			}, value);
 	}
 
-	std::ofstream& operator<<(std::ofstream& os) {
-		return os;
-	}
-
 	template<typename T>
 	T as() {
 		if (auto* ptr = std::get_if<T>(&value)) {
 			return*ptr;
 		}
 		throw std::runtime_error("value is invalid");
-	}
-
-	void reset(size_t pos) {
-		pos = pos;
 	}
 
 	void pretty_print(std::ostream& os)const {
@@ -126,13 +121,13 @@ struct job {
 				os << "}";
 			}
 		}
-		else if (auto* boolean = std::get_if<bool>(&value)) {
+		else if (auto* boolean = std::get_if<JsonBoolean>(&value)) {
 			os << *boolean ? "true" : "false";
 		}
-		else if (auto* number = std::get_if<double>(&value)) {
+		else if (auto* number = std::get_if<JsonNumber>(&value)) {
 			os << *number;
 		}
-		else if (auto* text = std::get_if<std::string>(&value)) {
+		else if (auto* text = std::get_if<JsonString>(&value)) {
 			os << '"';
 			for (auto c : *text) {
 				if (c == '"') {
@@ -265,10 +260,10 @@ private:
 		return j[pos];
 	}
 
-	std::string parse_string() {
+	JsonString parse_string() {
 		expect('"');
 		auto begin = pos;
-		std::string text;
+		JsonString text;
 		while (j[pos] != '"') {
 			if (j[pos] != '\\') {
 				pos++;
