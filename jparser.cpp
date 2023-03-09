@@ -1,4 +1,4 @@
-// jparser.cpp : This file contains the 'main' function. Program execution begins and ends there.
+arser.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 
 #include <iostream>
@@ -98,7 +98,7 @@ struct job {
 		os << std::endl;
 	}
 
-	void _print_indent(int n, std::ostream & os)const {
+	void _print_indent(int n, std::ostream& os)const {
 		while (n--) {
 			os << "\t";
 		}
@@ -121,7 +121,7 @@ struct job {
 					}
 					else {
 						os << "\n";
-						_print_indent(indent,os);
+						_print_indent(indent, os);
 
 					}
 				}
@@ -145,7 +145,7 @@ struct job {
 					count++;
 					if (count != dict.size()) {
 						os << ",\n";
-						_print_indent(indent + 1,os);
+						_print_indent(indent + 1, os);
 					}
 					else {
 						os << "\n";
@@ -208,11 +208,24 @@ private:
 
 	job parse_null() {
 		parse_whitespace();
+		//if (expect('null')) {
+		//	return job();
+		//}
 		if (next() == 'u' && next() == 'l' && next() == 'l') {
 			next();
 			return job();
 		}
 		throw std::runtime_error("null error");
+	}
+
+	bool expect(const char* s) {
+		parse_whitespace();
+		for (auto p = s; *p; p++) {
+			if (*p != j[pos++]) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	bool expect(char e) {
@@ -225,7 +238,6 @@ private:
 		throw std::runtime_error("expect error");
 	}
 
-
 	char peek() {
 		parse_whitespace();
 		return j[pos];
@@ -234,11 +246,6 @@ private:
 	char* peek_ptr() {
 		parse_whitespace();
 		return &j[pos];
-	}
-
-	void consume() {
-		parse_whitespace();
-		pos++;
 	}
 
 	std::unordered_map<std::string, job> parse_dict() {
@@ -258,7 +265,7 @@ private:
 				expect('}');
 				return dict;
 			}
-			consume(); // ,
+			next(); // ,
 		}
 		expect('}');
 		return dict;
@@ -275,7 +282,7 @@ private:
 				return array;
 			}
 			else {
-				consume(); //,
+				next(); //,
 			}
 		}
 		expect(']');
@@ -336,14 +343,12 @@ private:
 	job parse_boolean() {
 		parse_whitespace();
 		if (peek() == 't') {  // true
-			if (next() == 'r' && next() == 'u' && next() == 'e') {
-				next();
+			if (expect("true")) {
 				return job(true);
 			}
 		}
 		else if (peek() == 'f') {  // false
-			if (next() == 'a' && next() == 'l' && next() == 's' && next() == 'e') {
-				next();
+			if (expect("false")) {
 				return job(false);
 			}
 		}
@@ -355,30 +360,4 @@ private:
 std::istream& operator>>(std::istream& ifs, json_parser& jp) {
 	jp = json_parser(std::string{ std::istreambuf_iterator<char>{ ifs }, std::istreambuf_iterator<char>{} });
 	return ifs;
-}
-
-
-int main()
-{
-	std::vector<std::string> filenames = {
-		"test1.json",
-		"test2.json"
-	};
-
-	for (const auto& each : filenames) {
-		std::ifstream ifs(each, std::ios::in);
-		if (ifs.is_open() == true) {
-			json_parser jp;
-			ifs >> jp;
-			auto job = jp.parse();
-			std::stringstream ss1;
-			job.pretty_print(ss1);
-
-			json_parser jp2;
-			ss1 >> jp2;
-			auto job2 = jp2.parse();
-			std::stringstream ss2;
-			job2.pretty_print(std::cout);
-		}
-	}
 }
