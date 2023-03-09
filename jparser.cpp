@@ -1,4 +1,4 @@
-arser.cpp : This file contains the 'main' function. Program execution begins and ends there.
+// jparser.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 
 #include <iostream>
@@ -360,4 +360,37 @@ private:
 std::istream& operator>>(std::istream& ifs, json_parser& jp) {
 	jp = json_parser(std::string{ std::istreambuf_iterator<char>{ ifs }, std::istreambuf_iterator<char>{} });
 	return ifs;
+}
+
+
+int main()
+{
+	std::vector<std::string> filenames = {
+		"test1.json",
+		"test2.json",
+		"Boing.ahap"
+		"Drums.ahap",
+		"Gravel.ahap",
+		"Heartbeats.ahap",
+		"Inflate.ahap",
+		"Oscillate.ahap",
+		"Rumble.ahap"
+	};
+
+	for (const auto& each : filenames) {
+		std::ifstream ifs(each, std::ios::in);
+		if (ifs.is_open() == true) {
+			json_parser jp;
+			ifs >> jp;
+			auto job = jp.parse();
+			std::stringstream ss1;
+			job.pretty_print(ss1);
+
+			json_parser jp2;
+			ss1 >> jp2;
+			auto job2 = jp2.parse();
+			std::stringstream ss2;
+			job2.pretty_print(std::cout);
+		}
+	}
 }
