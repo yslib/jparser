@@ -10,9 +10,223 @@
 #include <map>
 #include <list>
 #include <variant>
-
 #define ANKERL_NANOBENCH_IMPLEMENT
 #include "nanobench.h"
+
+constexpr std::size_t CashLine = 64;
+
+void* AllocAligned(std::size_t size, int align) {
+	return _aligned_malloc(size, align);
+}
+
+void FreeAligned(void* ptr) {
+	_aligned_free(ptr);
+}
+
+template <typename T>
+T* AllocAligned(std::size_t n)
+{
+	return (T*)(AllocAligned(sizeof(T) * n, 64));
+}
+
+// A region-based memory manager "Fast allocation and deallocation of memory based on object lifetimes"
+template <int nCashLine = 64>
+class DataArena
+{
+	const size_t m_blockSize;
+	size_t m_currentBlockPos;
+	size_t m_currentAllocBlockSize;
+	uint8_t* m_currentBlock;
+	size_t m_fragmentSize;
+	//std::vector<int> m_pos;
+	std::list<std::pair<uint8_t*, int>> m_used;
+	std::list<std::pair<uint8_t*, int>> m_available;
+
+public:
+	explicit DataArena(size_t size = 1024 * 1024) :
+		m_blockSize(size),
+		m_currentAllocBlockSize(0),
+		m_currentBlock(nullptr),
+		m_currentBlockPos(0),
+		m_fragmentSize(0)
+	{
+		// Default block is 1MB
+	}
+
+	DataArena(const DataArena& arena) = delete;
+	DataArena& operator=(const DataArena& arena) = delete;
+
+	DataArena(DataArena&& arena) noexcept :
+		m_blockSize(arena.m_blockSize), m_currentBlockPos(arena.m_currentBlockPos), m_currentAllocBlockSize(arena.m_currentAllocBlockSize), m_currentBlock(arena.m_currentBlock), m_fragmentSize(arena.m_fragmentSize), m_used(std::move(arena.m_used)), m_available(std::move(arena.m_available))
+	{
+		arena.m_currentBlock = nullptr;
+	}
+
+	DataArena& operator=(DataArena&& arena) noexcept
+	{
+		Release();	// Release memory
+		m_blockSize = arena.m_blockSize;
+		m_currentBlockPos = arena.m_currentBlockPos;
+		m_currentAllocBlockSize = arena.m_currentAllocBlockSize;
+		m_currentBlock = arena.m_currentBlock;
+		arena.m_currentBlock = nullptr;
+		m_fragmentSize = arena.m_fragmentSize;
+		m_used = std::move(arena.m_used);
+		m_available = std::move(arena.m_available);
+		return *this;
+	}
+
+	void* Alloc(size_t bytes)
+	{
+		const auto align = alignof(std::max_align_t);
+		bytes = (bytes + align - 1) & ~(align - 1);	 // Find a proper size to match the aligned boundary
+		if (m_currentBlockPos + bytes > m_currentAllocBlockSize) {
+			// Put into used list. A fragment generates.
+			if (m_currentBlock) {
+				m_used.push_back(std::make_pair(m_currentBlock, m_currentAllocBlockSize));
+				m_fragmentSize += m_currentAllocBlockSize - m_currentBlockPos;
+				m_currentBlock = nullptr;
+				m_currentBlockPos = 0;
+				//std::cout << "Current block can not accommodate this size, put it into used list.\n";
+			}
+
+			// Try to find available block
+			for (auto it = m_available.begin(); it != m_available.end(); ++it) {
+				if (bytes <= it->second) {
+					m_currentBlock = it->first;
+					m_currentAllocBlockSize = it->second;
+					m_currentBlockPos = 0;
+					break;
+				}
+			}
+
+			if (!m_currentBlock) {
+				// Available space can not be found. Allocates new memory
+				m_currentAllocBlockSize = (std::max)(bytes, m_blockSize);
+				m_currentBlock = static_cast<uint8_t*>(AllocAligned(m_currentAllocBlockSize, nCashLine));
+				if (m_currentBlock == nullptr) {
+					return nullptr;
+				}
+				m_currentBlockPos = 0;
+			}
+			m_currentBlockPos = 0;
+		}
+		const auto ptr = m_currentBlock + m_currentBlockPos;
+		m_currentBlockPos += bytes;
+		return ptr;
+	}
+
+	/**
+	 * \brief Allocate for \a n objects for type \a T, runs constructor depends on \a construct on it and return its pointer
+	 *
+	 * \note For safety, this function should be check if the \a T is a type of POD or trivial.
+	 *		 Maybe it can be checked by \a std::is_trivial or \a std::is_pod(deprecated).
+	 *		 This issued will be addressed later.
+	 *
+	 * \sa Reset()
+	 */
+	template <typename T>
+	T* Alloc(size_t n, bool construct = true)
+	{
+		const auto ptr = static_cast<T*>(Alloc(n * sizeof(T)));
+		if (ptr == nullptr)
+			return nullptr;
+		if (construct)
+			for (auto i = 0; i < n; i++)
+				new (&ptr[i]) T();
+		return ptr;
+	}
+
+	template <typename T, typename... Args>
+	T* AllocConstruct(Args &&... args)
+	{
+		const auto ptr = static_cast<T*>(Alloc(sizeof(T)));
+		if (ptr == nullptr) return nullptr;
+		new (ptr) T(std::forward<Args>(args)...);
+		return ptr;
+	}
+
+	void Release()
+	{
+		for (auto it = m_used.begin(); it != m_used.end(); ++it) FreeAligned(it->first);
+		for (auto it = m_available.begin(); it != m_available.end(); ++it) FreeAligned(it->first);
+		FreeAligned(m_currentBlock);
+	}
+
+	void Shrink()
+	{
+		for (auto it = m_available.begin(); it != m_available.end(); ++it) FreeAligned(it->first);
+	}
+
+	void Reset()
+	{
+		m_currentBlockPos = 0;
+		m_fragmentSize = 0;
+		m_available.splice(m_available.begin(), m_used);
+	}
+
+	size_t TotalAllocated() const
+	{
+		auto alloc = m_currentAllocBlockSize;
+		for (auto it = m_used.begin(); it != m_used.end(); ++it) alloc += it->second;
+		for (auto it = m_available.begin(); it != m_available.end(); ++it) alloc += it->second;
+		return alloc;
+	}
+
+	size_t FragmentSize() const
+	{
+		return m_fragmentSize;
+	}
+
+	double FragmentRate() const
+	{
+		return static_cast<double>(m_fragmentSize) / TotalAllocated();
+	}
+
+	~DataArena()
+	{
+		Release();
+	}
+};
+
+using Arena64 = DataArena<64>;
+
+Arena64 g_arena(1024 * 1024 * 1024);
+
+template<class T>
+struct ArenaAllocator
+{
+	typedef T value_type;
+
+	// Arena64* m_arena = nullptr;
+	ArenaAllocator() = default;
+
+	template<class U>
+	constexpr ArenaAllocator(const ArenaAllocator <U>&) noexcept {}
+
+	T* allocate(std::size_t n)
+	{
+		return (T*)g_arena.Alloc(n * sizeof(T));
+		//return (T*)std::malloc(n);
+	}
+
+	void deallocate(T* p, std::size_t n) noexcept
+	{
+		//return std::free(p);
+		//std::cout << "dealloate: " << n << std::endl;;
+	}
+};
+
+template<class T, class U>
+inline bool operator==(const ArenaAllocator <T>&, const ArenaAllocator <U>&) {
+	return true;
+}
+
+template<class T, class U>
+inline bool operator!=(const ArenaAllocator <T>&, const ArenaAllocator <U>&) {
+	return false;
+}
+
 
 enum class object_type {
 	dict,
@@ -24,25 +238,60 @@ enum class object_type {
 };
 
 struct job;
-using JsonString = std::string;
+using JsonString = std::string;// std::basic_string<char, std::char_traits<char>, ArenaAllocator<char>>;;
+//using JsonArray = std::vector<job, ArenaAllocator<job>>;
 using JsonArray = std::vector<job>;
-using JsonDict = std::map<JsonString, job>;
+//using JsonArray = std::list<job, ArenaAllocator<job>>;
+using JsonDict = std::map<
+	JsonString,
+	job,
+	std::less<JsonString>,
+	ArenaAllocator<std::pair<const JsonString, job>>>;
+// using JsonDict = std::unordered_map<JsonString, job, std::hash<JsonString>, std::equal_to<JsonString>, ArenaAllocator<std::pair<const JsonString, job>>>;
+// using JsonDict = std::unordered_map<JsonString, job>;
+// using JsonDict = std::map<JsonString, job>;
 using JsonNumber = double;
 using JsonBoolean = bool;
 struct JsonNull {};
 
+
+// perfermance rank:
+/*
+
+list/treemap with a good allocator
+
+vector/treemap with good allocator
+
+list/treemap
+
+vector with allocator / treemap
+
+vector/treemap
+
+vector/hashmap
+
+*/
+
 template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded(Ts...)->overloaded<Ts...>;
 
-
 struct job {
 	std::variant<JsonNumber, JsonBoolean, JsonString, JsonDict, JsonArray, JsonNull> value;
-	job() :value(JsonNull()) {}
-	job(JsonNumber n) :value(n) {}
+	job() : value(JsonNull()) {}
+	job(JsonNumber n) : value(n) {}
 	job(JsonBoolean v) : value(v) {}
-	job(JsonString text) :value(text) {}
-	job(JsonDict dict) :value(std::move(dict)) {}
-	job(JsonArray array) :value(std::move(array)) {}
+	job(JsonString text) : value(text) {}
+	job(JsonDict dict) : value(std::move(dict)) {}
+	job(JsonArray array) : value(std::move(array)) {}
+
+	job(job&&)noexcept = default;
+	job& operator=(job&&)noexcept = default;
+
+	//job(job& other){
+	//}
+	//job& operator=(const job& other) {
+	//	return *this;
+	//}
 
 	job& operator[](const JsonString& key) {
 		return std::visit([&](auto&& arg)->job& {
@@ -81,7 +330,7 @@ struct job {
 				os << "[\n";
 				_print_indent(indent + 1, os);
 				int count = 0;
-				for (auto e : *array) {
+				for (const auto& e : *array) {
 					e._print(indent + 1, os);
 					count++;
 					if (count != array->size()) {
@@ -105,7 +354,7 @@ struct job {
 				os << "{\n";
 				_print_indent(indent + 1, os);
 				auto count = 0;
-				for (auto e : *dict) {
+				for (auto& e : *dict) {
 					os << "\"" << e.first << "\": ";
 					e.second._print(indent + 1, os);
 					count++;
@@ -150,7 +399,6 @@ struct json_parser {
 	std::string j;
 	json_parser() :pos(0) {}
 	json_parser(std::string json) :pos(0), j(json) {}
-
 	job parse() {
 		pos = 0;
 		return parse_value();
@@ -218,7 +466,7 @@ private:
 			expect(':');
 			auto value = parse_value();
 			if (dict.find(key) == dict.end()) {
-				dict[key] = value;
+				dict.emplace(std::move(key), std::move(value));
 			}
 			else {
 				throw std::runtime_error("duplicate key");
@@ -238,7 +486,7 @@ private:
 	JsonArray parse_array() {
 		expect('[');
 		JsonArray array;
-		array.reserve(50);
+		// array.reserve(50);
 		while (peek() != ']') {
 			auto val = parse_value();
 			array.push_back(std::move(val));
@@ -365,7 +613,6 @@ int main()
 	};
 
 
-
 	for (const auto& each : filenames) {
 		std::ifstream ifs(each, std::ios::in);
 		if (ifs.is_open() == true) {
@@ -377,6 +624,7 @@ int main()
 					auto job = jp.parse();
 					// job.pretty_print(std::cout);
 					ankerl::nanobench::doNotOptimizeAway(job);
+					g_arena.Reset();
 					//json_parser jp2;
 					//ss1 >> jp2;
 					//auto job2 = jp2.parse();
@@ -392,4 +640,5 @@ int main()
 
 		}
 	}
+	g_arena.Release();
 }
