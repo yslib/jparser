@@ -347,21 +347,21 @@ std::istream& operator>>(std::istream& ifs, json_parser& jp) {
 int main()
 {
 	std::vector<std::string> filenames = {
-		"test1.json",
-		"test2.json",
-		"Boing.ahap"
-		"Drums.ahap",
-		"Gravel.ahap",
-		"Heartbeats.ahap",
-		"Inflate.ahap",
-		"Oscillate.ahap",
-		"Rumble.ahap"
-		"canada.json",
-		"citm_catelog.json",
-		"twitter.json",
-		"pass01.json",
-		"pass02.json",
-		"pass03.json",
+		"data\\test1.json",
+		"data\\test2.json",
+		"data\\Boing.ahap"
+		"data\\Drums.ahap",
+		"data\\Gravel.ahap",
+		"data\\Heartbeats.ahap",
+		"data\\Inflate.ahap",
+		"data\\Oscillate.ahap",
+		"data\\Rumble.ahap"
+		"data\\canada.json",
+		"data\\citm_catelog.json",
+		"data\\twitter.json",
+		"data\\pass01.json",
+		"data\\pass02.json",
+		"data\\pass03.json",
 	};
 
 
