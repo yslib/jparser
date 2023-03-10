@@ -150,7 +150,7 @@ public:
 	{
 		for (auto it = m_used.begin(); it != m_used.end(); ++it) FreeAligned(it->first);
 		for (auto it = m_available.begin(); it != m_available.end(); ++it) FreeAligned(it->first);
-		FreeAligned(m_currentBlock);
+		//FreeAligned(m_currentBlock);
 	}
 
 	void Shrink()
@@ -238,7 +238,8 @@ enum class object_type {
 };
 
 struct job;
-using JsonString = std::string;// std::basic_string<char, std::char_traits<char>, ArenaAllocator<char>>;;
+// using JsonString = std::string;// std::basic_string<char, std::char_traits<char>, ArenaAllocator<char>>;;
+using JsonString = std::string_view;// std::basic_string<char, std::char_traits<char>, ArenaAllocator<char>>;;
 //using JsonArray = std::vector<job, ArenaAllocator<job>>;
 using JsonArray = std::vector<job>;
 //using JsonArray = std::list<job, ArenaAllocator<job>>;
@@ -377,16 +378,17 @@ struct job {
 			os << *number;
 		}
 		else if (auto* text = std::get_if<JsonString>(&value)) {
-			os << '"';
-			for (auto c : *text) {
-				if (c == '"') {
-					os << "\\\"";
-				}
-				else {
-					os << c;
-				}
-			}
-			os << '"';
+			os << '"' << *text << '"';
+			//os << '"';
+			//for (auto c : *text) {
+			//	if (c == '"') {
+			//		os << "\\\"";
+			//	}
+			//	else {
+			//		os << c;
+			//	}
+			//}
+			//os << '"';
 		}
 		else if (auto* null = std::get_if<JsonNull>(&value)) {
 			os << "null";
@@ -511,16 +513,16 @@ private:
 	JsonString parse_string() {
 		expect('"');
 		auto begin = pos;
-		JsonString text;
+		//JsonString text;
 		while (j[pos] != '"') {
 			if (j[pos] != '\\') {
 				pos++;
 			}
 			else {
 				// escape char
-				text.append(&j[begin], &j[pos]);
+				// text.append(&j[begin], &j[pos]);
 				if (char c = next2()) {
-					text.push_back(c);
+					// text.push_back(c);
 				}
 				else {
 					throw std::runtime_error("\\0 encountered.");
@@ -529,7 +531,8 @@ private:
 				begin = pos;
 			}
 		}
-		text.append(&j[begin], &j[pos]);
+		// text.append(&j[begin], &j[pos]);
+		JsonString text(&j[begin], pos - begin);
 		expect('"');
 		return text;
 	}
@@ -622,15 +625,15 @@ int main()
 				ankerl::nanobench::Bench().minEpochIterations(200).run(each, [&] {
 					//jp.j = R"("\\")";
 					auto job = jp.parse();
-					// job.pretty_print(std::cout);
+					std::stringstream ss1;
+					job.pretty_print(ss1);
 					ankerl::nanobench::doNotOptimizeAway(job);
+					json_parser jp2;
+					ss1 >> jp2;
+					auto job2 = jp2.parse();
+					std::stringstream ss2;
+					job2.pretty_print(ss2);
 					g_arena.Reset();
-					//json_parser jp2;
-					//ss1 >> jp2;
-					//auto job2 = jp2.parse();
-					//std::stringstream ss2;
-					//job2.pretty_print(std::cout);
-					//std::cout << each << " passed.\n";
 					}
 				);
 			}
